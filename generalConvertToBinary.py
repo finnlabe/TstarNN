@@ -22,6 +22,10 @@ outputpath = args.outputpath
 # definine output filename base
 frozen_graph_filename = "frozen_graph"
 
+# load model
+custom_objs = {} # here you may need to load any custom metrics, functions...
+model = tf.keras.models.load_model(inputpath, custom_objects=custom_objs)
+
 # Convert Keras model to ConcreteFunction
 full_model = tf.function(lambda inputs: model(inputs))
 full_model = full_model.get_concrete_function(
