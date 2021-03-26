@@ -1,10 +1,6 @@
 # Small tool to deploy a TF2 network to include in UHH2 with the present code
 # Expected outputs: frozen_graph.pb and frozen_graph.config.pbtxt
 
-## IMPORTANT ##
-# The following code assumes a loaded keras model!
-# For a fully working example, including loading of a model , see "convertToBinary.py".
-
 # import assumes TF2 installed!
 import tensorflow as tf
 from tensorflow import keras
