@@ -11,8 +11,8 @@ from tensorflow.keras import backend as k
 import pickle
 
 from DNN_misc import manageOutputdir, acc_all, acc_bkg, acc_sig, nominalLoss_wrapper, DisCoLoss_wrapper, cross_entropy_DisCo, mean_squared_error_DisCo, layerblock
-from DNN_manageData import getDataOneFile, getDataMultipleFiles, doSTcut, normalize, shuffle_four_arrays
-from DNN_plot import doHistoryPlots, plot_output, plot_ROC, plot_2D, plot_ST
+from DNN_manageData import getDataOneFile, getDataMultipleFiles, doSTcut, normalize, shuffle_three_arrays, shuffle_four_arrays, removeNegativeWeights
+from DNN_plot import doHistoryPlots, plot_output, plot_ROC, plot_2D, plot_ST, plot_hist
 
 import argparse
 parser = argparse.ArgumentParser(description='DNN for TstarTstar search.')
@@ -21,6 +21,7 @@ parser.add_argument('--layers', help="number of hidden layers", default=3)
 parser.add_argument('--nodes', help="number of nodes per hidden layer", default=50)
 parser.add_argument('--dropout', help="parameter determining dropout amount", default=0)
 parser.add_argument('--STreweighting', action='store_const', help="do ST reweighting?", default=0, const=1)
+parser.add_argument('--addInputs', action='store_const', help="use additional inputs?", default=0, const=1)
 args = parser.parse_args()
 decorrelation_strength = float(args.DisCo)
 number_hidden_nodes=[]
@@ -28,6 +29,7 @@ for layer in range(0, int(args.layers)):
     number_hidden_nodes.append(int(args.nodes))
 dropout = float(args.dropout)
 doSTreweighting = bool(args.STreweighting)
+doAddInputs = bool(args.addInputs)
 
 print("Training a network with decorrelation strength: "+str(decorrelation_strength))
 if(doSTreweighting): print("Network is using ST-reweighted inputs.")
@@ -41,29 +43,38 @@ print("Num GPUs Available: ", len(tf.config.experimental.list_physical_devices('
 ##################################
 
 inputpath = '/nfs/dust/cms/user/flabe/TstarTstar/data/Analysis/hadded/'
+#mass_train = [700, 800, 900, 1000, 1300, 1400, 1500, 1600, 1700, 1800, 1900, 2000]
 mass_train = [700, 800, 900, 1000, 1300, 1400, 1500, 1600, 1700, 1800, 1900, 2000]
 mass_notseen = 1200
 
 number_inputs = 33
-epochs=200
-batch_size=2048
-learning_rate = 0.0007
+number_addInputs = 3
+epochs=100
+#batch_size=2048
+batch_size=4096
+learning_rate = 0.00001
 kernel_init = "random_uniform" # default is glorot_uniform
 
 testrun = False
-balanceSigBkg = False
+balanceCount = False
+balanceWeight = False
 
 test_split = 0.1
 validation_split = 0.1
-do_ST_cut = True
+do_ST_cut = False
+remove_negative_weights = False
 batch_norm = False
+run_eagerly = False # useful for debugging
 
 ##########################################################################
 
 # calculating some derived information
 branches_to_analyze = ["DNN_Input_"+str(x) for x in range(number_inputs)]
+if(doAddInputs): branches_to_analyze.extend(["DNN_AddInput_"+str(x) for x in range(number_addInputs)])
+print(branches_to_analyze)
 number_layers=len(number_hidden_nodes)
 filenameBkg = inputpath + 'uhh2.AnalysisModuleRunner.MC.TTbar.root'
+#filenameSig = inputpath + 'uhh2.AnalysisModuleRunner.MC.TstarTstar.root'
 filenameSig_base = inputpath + 'uhh2.AnalysisModuleRunner.MC.TstarTstar_M-'
 filenameSig_notseen = inputpath + 'uhh2.AnalysisModuleRunner.MC.TstarTstar_M-'+str(mass_notseen)+'.root'
 output_path = "/nfs/dust/cms/user/flabe/MLCorner/TstarNN/DisCoApproach/output/" # TODO later implement parametric
@@ -73,6 +84,7 @@ outputdir = output_path+"/STweight"+str(doSTreweighting)+"_lambda"+str(decorrela
 for node in number_hidden_nodes:
     outputdir += str(node)+"_"
 outputdir += "dropout"+str(dropout)
+if(doAddInputs): outputdir += "_AddInputs"
 if(testrun): outputdir+="__TEST"
 
 # manage directory
@@ -88,23 +100,17 @@ print("Starting to include data")
 
 # get input data
 arrBkg, arrBkg_weights, arrBkg_ST = getDataOneFile(filenameBkg, branches_to_analyze, doSTreweighting)
-arrSig, arrSig_weights, arrSig_ST = getDataMultipleFiles(filenameSig_base, mass_train, branches_to_analyze, False) # for the moment, signal is not reweighted. but can be changed here if needed
+arrSig, arrSig_weights, arrSig_ST = getDataMultipleFiles(filenameSig_base, mass_train, branches_to_analyze, doSTreweighting) # for the moment, signal is not reweighted. but can be changed here if needed
+#arrSig, arrSig_weights, arrSig_ST = getDataOneFile(filenameSig, branches_to_analyze, False)
+plot_ST(arrSig_ST, arrSig_weights, arrBkg_ST, arrBkg_weights, outputdir)
 
-# do HT cut
+# do ST cut
 if(do_ST_cut):
     arrBkg, arrBkg_weights, arrBkg_ST = doSTcut(arrBkg, arrBkg_weights, arrBkg_ST)
     arrSig, arrSig_weights, arrSig_ST = doSTcut(arrSig, arrSig_weights, arrSig_ST)
-
-# throw away some data for test purposes
-if(testrun):
-    lenBkg = round(len(arrBkg)/10)
-    lenSig = round(len(arrSig)/10)
-    arrBkg = arrBkg[:lenBkg]
-    arrBkg_weights = arrBkg_weights[:lenBkg]
-    arrBkg_ST = arrBkg_ST[:lenBkg]
-    arrSig = arrSig[:lenSig]
-    arrSig_weights = arrSig_weights[:lenSig]
-    arrSig_ST = arrSig_ST[:lenSig]
+if(remove_negative_weights):
+    arrBkg, arrBkg_weights, arrBkg_ST = removeNegativeWeights(arrBkg, arrBkg_weights, arrBkg_ST)
+    arrSig, arrSig_weights, arrSig_ST = removeNegativeWeights(arrSig, arrSig_weights, arrSig_ST)
 
 # check weighting
 sig_weight = np.sum(arrSig_weights)
@@ -117,7 +123,9 @@ print("Total signal weight: "+str(sig_weight))
 print("Background event count: "+str(len(arrBkg)))
 print("Total background weight: "+str(bkg_weight))
 
-if(balanceSigBkg):
+if(balanceCount):
+    arrSig, arrSig_weights, arrSig_ST = shuffle_three_arrays(arrSig, arrSig_weights, arrSig_ST)
+    arrBkg, arrBkg_weights, arrBkg_ST = shuffle_three_arrays(arrBkg, arrBkg_weights, arrBkg_ST)
     if(len(arrSig) < len(arrBkg)):
         arrBkg = arrBkg[:len(arrSig)]
         arrBkg_weights = arrBkg_weights[:len(arrSig)]
@@ -127,20 +135,19 @@ if(balanceSigBkg):
         arrSig_weights = arrSig_weights[:len(arrBkg)]
         arrSig_ST = arrSig_ST[:len(arrBkg)]
 
+if(balanceWeight):
     sig_weight = np.sum(arrSig_weights)
     bkg_weight = np.sum(arrBkg_weights)
     weightFactor = sig_weight/bkg_weight
     arrBkg_weights = arrBkg_weights*weightFactor
     bkg_weight = np.sum(arrBkg_weights)
 
-    print("------ For training ------")
-    print("Signal event count: "+str(len(arrSig)))
-    print("Total signal weight: "+str(sig_weight))
-    print("Background event count: "+str(len(arrBkg)))
-    print("Total background weight: "+str(bkg_weight))
+print("------ For training ------")
+print("Signal event count: "+str(len(arrSig)))
+print("Total signal weight: "+str(sig_weight))
+print("Background event count: "+str(len(arrBkg)))
+print("Total background weight: "+str(bkg_weight))
 
-
-plot_ST(arrSig_ST, arrSig_weights, arrBkg_ST, arrBkg_weights, outputdir)
 
 print("Preparing data...")
 
@@ -155,6 +162,17 @@ ST_array = np.concatenate((arrBkg_ST, arrSig_ST), axis=0)
 # shuffling
 Values_array, Labels_array, Weights_array, ST_array = shuffle_four_arrays(Values_array, Labels_array, Weights_array, ST_array)
 
+# throw away some data for test purposes
+if(testrun):
+    print("Using only 1 percent of available data (after shuffling).")
+    length = round(len(Values_array)/100)
+    Values_array = Values_array[:length]
+    Labels_array = Labels_array[:length]
+    Weights_array = Weights_array[:length]
+    ST_array = ST_array[:length]
+    epochs = round(epochs / 10)
+    print("Using only "+str(epochs)+" epochs.")
+
 # transforming arrays in float
 Labels_array = Labels_array.astype(np.float)
 Values_array = Values_array.astype(np.float)
@@ -163,6 +181,8 @@ ST_array = ST_array.astype(np.float)
 
 # Normalizing value array
 Values_array = normalize(Values_array,len(branches_to_analyze),outputdir+"/data/",True) # note the true, outputting values here!
+# added to maybe fix DisCo
+# ST_array *= 1/np.ndarray.max(ST_array)
 
 # Splitting in Training and Test
 random_vals = np.random.rand(len(Values_array))
@@ -192,8 +212,6 @@ Weights_array_test = np.ravel(Weights_array_test)
 ST_array_train = np.ravel(ST_array_train)
 ST_array_val = np.ravel(ST_array_val)
 ST_array_test = np.ravel(ST_array_test)
-
-print(Labels_array_train)
 
 # stack true, ST arrays and weight
 Labels_array_train_stacked = np.column_stack((Labels_array_train, ST_array_train, Weights_array_train))
@@ -246,7 +264,9 @@ print(model.summary())
 
 # Compiling the model
 print("compiling model")
-model.compile(loss=mean_squared_error_DisCo(decorrelation_strength), optimizer=tf.keras.optimizers.RMSprop(lr=learning_rate), metrics=[acc_all, acc_sig, acc_bkg, nominalLoss_wrapper(), DisCoLoss_wrapper(decorrelation_strength)], run_eagerly=True)
+model.compile(loss=mean_squared_error_DisCo(decorrelation_strength), optimizer=tf.keras.optimizers.RMSprop(lr=learning_rate), metrics=[acc_all(), acc_sig, acc_bkg, nominalLoss_wrapper(), DisCoLoss_wrapper(decorrelation_strength)], run_eagerly=run_eagerly)
+# in case of strange crash, add run_eagerly=True
+# also in case of debugging. Should not be needed though
 
 # Fit the model
 print("Fitting model")

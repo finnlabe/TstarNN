@@ -15,8 +15,8 @@ def outputWeights(model, datadir):
 
 def plot_accuracy(history, outputdir):
     fig_acc = plt.figure(figsize=(12,8))
-    plt.plot(history.history['acc_all'],color="blue")
-    plt.plot(history.history['val_acc_all'],color="red")
+    plt.plot(history.history['accuracy'],color="blue")
+    plt.plot(history.history['val_accuracy'],color="red")
     plt.title('',fontsize=20)
     plt.ylabel('weighted accuracy',fontsize=30, labelpad=15)
     plt.xlabel('epoch',fontsize=30, labelpad=15)
@@ -137,10 +137,17 @@ def plot_2D(output, HT, weights, outputdir):
 
 def plot_ST(STsig, weightsig, STbkg, weightbkg, outputdir):
     fig=plt.figure()
-    plt.hist(STsig, range(0, 3000, 100), weights=weightsig, label="Signal", alpha = 0.5)
-    plt.hist(STbkg, range(0, 3000, 100), weights=weightbkg, label="Background", alpha = 0.5)
+    plt.hist(STsig, range(0, 6000, 100), weights=weightsig, label="Signal", alpha = 0.5, log=True)
+    plt.hist(STbkg, range(0, 6000, 100), weights=weightbkg, label="Background", alpha = 0.5, log=True)
     plt.legend()
     fig.savefig(outputdir+'/plots/ST.png')
+
+def plot_hist(data, label, outputdir, weights=np.zeros(1)):
+    fig=plt.figure()
+    if(np.array_equal(weights, np.zeros(1))): weights=np.ones(len(data))
+    plt.hist(data, np.arange(0.95*np.amin(data), 1.05*np.amax(data), (np.amax(data)-np.amin(data))/100), weights=weights, label=label, log=True)
+    plt.legend()
+    fig.savefig(outputdir+'/plots/'+label+'.png')
 
 def doHistoryPlots(history, outputdir):
     plot_accuracy(history, outputdir)

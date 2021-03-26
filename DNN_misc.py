@@ -28,11 +28,13 @@ def manageOutputdir(outputdir):
 
 
 # custom metrics
-def acc_all(labels, predictions):
+def acc_all():
     m = tf.keras.metrics.Accuracy()
-    weights = tf.reshape(labels[:,2],[tf.size(labels[:,2]).numpy(), 1])
-    m.update_state(labels[:,0], predictions, sample_weight=weights)
-    return m.result().numpy()
+    def accuracy(labels, predictions):
+        weights = tf.reshape(labels[:,2],[-1, 1])
+        m.update_state(labels[:,0], predictions, sample_weight=weights)
+        return m.result()
+    return accuracy
 
 # partial accuracys for weighted
 def acc_sig(labels, predictions):
@@ -50,17 +52,23 @@ def acc_bkg(labels, predictions):
 
 def nominalLoss_wrapper():
     def nominalLoss(y_true, y_pred):
-        bce = tf.keras.losses.BinaryCrossentropy()
-        weights = tf.reshape(y_true[:,2],[tf.size(y_true[:,2]).numpy(), 1])
-        loss_bce = bce(y_true[:,0], y_pred, sample_weight=weights)
+        bce = tf.keras.losses.MeanSquaredError()
+        #bce = tf.keras.losses.BinaryCrossentropy()
+        weights = tf.reshape(y_true[:,2],[-1])
+        true = tf.reshape(y_true[:,0],[-1, 1])
+        pred = tf.reshape(y_pred,[-1, 1])
+        loss_bce = bce(true, pred, sample_weight=weights)
         return loss_bce
     return nominalLoss
 
 def DisCoLoss_wrapper(param):
     def DisCoLoss(y_true, y_pred):
-        totalWeight = k.sum(y_true[:,2])
-        weights = y_true[:,2]*tf.size(y_true[:,2]).numpy()/totalWeight
-        loss_DisCo = param*distance_corr(y_true[:,1], y_pred[:,0], weights)
+        weights = tf.reshape(y_true[:,2],[-1])
+        weights_normed = tf.reshape(tf.linalg.normalize(weights)[0],[-1])
+        weights_normed = tf.math.multiply(weights_normed, tf.cast(tf.size(weights_normed), tf.dtypes.float32)/tf.math.reduce_sum(weights_normed))
+        st = tf.reshape(y_true[:,1],[-1])
+        pred = tf.reshape(y_pred,[-1])
+        loss_DisCo = param * distance_corr(st, pred, weights_normed, 2)
         return loss_DisCo
     return DisCoLoss
 
@@ -69,14 +77,16 @@ def cross_entropy_DisCo(param):
     def loss(y_true, y_pred):
         # calculating weighted BCE
         bce = tf.keras.losses.BinaryCrossentropy()
-        weights = tf.reshape(y_true[:,2],[tf.size(y_true[:,2]).numpy(), 1])
+        weights = tf.reshape(y_true[:,2],[-1, 1])
         loss_bce = bce(y_true[:,0], y_pred, sample_weight=weights)
 
         # calculating DisCo
         # ensuring weights sum up to sample count
-        totalWeight = k.sum(y_true[:,2])
-        weights = y_true[:,2]*tf.size(y_true[:,2]).numpy()/totalWeight
-        loss_DisCo = param * distance_corr(y_true[:,1], y_pred[:,0], weights)
+        weights_normed = tf.reshape(tf.linalg.normalize(weights)[0],[-1])
+        weights_normed = tf.math.multiply(weights_normed, tf.cast(tf.size(weights_normed), tf.dtypes.float32)/tf.math.reduce_sum(weights_normed))
+        st = tf.reshape(y_true[:,1],[-1])
+        pred = tf.reshape(y_pred,[-1])
+        loss_DisCo = param * distance_corr(st, pred, weights_normed, 2)
 
         return loss_bce + loss_DisCo
     return loss
@@ -85,15 +95,18 @@ def mean_squared_error_DisCo(param):
     def loss(y_true, y_pred):
         # calculating weighted BCE
         mse = tf.keras.losses.MeanSquaredError()
-        weights = tf.reshape(y_true[:,2],[-1, 1])
-        loss_mse = mse(y_true[:,0], y_pred, sample_weight=weights)
-        print(loss_mse)
+        weights = tf.reshape(y_true[:,2],[-1])
+        pred = tf.reshape(y_pred,[-1, 1])
+        true = tf.reshape(y_true[:,0],[-1, 1])
+        loss_mse = mse(true, pred, sample_weight=weights)
 
         # calculating DisCo
         # ensuring weights sum up to sample count
-        totalWeight = k.sum(y_true[:,2])
-        weights = y_true[:,2]*tf.size(y_true[:,2]).numpy()/totalWeight
-        loss_DisCo = param * distance_corr(y_true[:,1], y_pred[:,0], weights)
+        weights_normed = tf.reshape(tf.linalg.normalize(weights)[0],[-1])
+        weights_normed = tf.math.multiply(weights_normed, tf.cast(tf.size(weights_normed), tf.dtypes.float32)/tf.math.reduce_sum(weights_normed))
+        st = tf.reshape(y_true[:,1],[-1])
+        pred = tf.reshape(y_pred,[-1])
+        loss_DisCo = param * distance_corr(st, pred, weights_normed, 2)
 
         return loss_mse + loss_DisCo
     return loss
@@ -101,7 +114,7 @@ def mean_squared_error_DisCo(param):
 def layerblock(L, nodes, kernel_init, dropout_val=0, batchNorm=False):
     if(batchNorm): L = BatchNormalization()(L)
 
-    L = Dense(nodes, kernel_initializer=kernel_init, activation='tanh')(L)
+    L = Dense(nodes, kernel_initializer=kernel_init, bias_initializer='zeros', activation='tanh')(L)
     if(dropout_val > 0): L = Dropout(dropout_val)(L)
     L = ReLU()(L)
     return L
